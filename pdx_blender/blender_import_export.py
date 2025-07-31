@@ -1249,8 +1249,9 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                 ctx = bpy.context.copy()
                 ctx["active_object"] = created[0]
                 ctx["selected_editable_objects"] = created
-                bpy.ops.object.join(ctx)
-                ctx.clear()
+                with bpy.context.temp_override(**ctx):
+                    bpy.ops.object.join()
+                del ctx
 
     # go through locators
     if imp_locs and locators:
