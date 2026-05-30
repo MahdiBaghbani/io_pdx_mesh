@@ -10,8 +10,12 @@ import os
 import sys
 import webbrowser
 from functools import partial
-from imp import reload
 from textwrap import wrap
+
+try:
+    from importlib import reload
+except ImportError:
+    pass
 
 import maya.api.OpenMaya as OpenMayaAPI
 import maya.cmds as cmds
@@ -58,7 +62,7 @@ except Exception as err:
     IO_PDX_LOG.error(err)
     raise
 
-# Py2, Py3 compatibility (Maya doesn't yet use Py3, this is purely to stop flake8 complaining)
+# Py2, Py3 compatibility (`long` only exists on Py2, so alias it on Py3)
 if sys.version_info >= (3, 0):
     long = int
 

@@ -1,6 +1,6 @@
 """
 IO PDX Mesh Python module.
-Supports Maya 2018 and up, supports Blender 2.83 and up.
+Supports Maya 2018 and up, supports Blender 3.6.4 and up.
 
 author : ross-g
 """
@@ -15,7 +15,11 @@ import sys
 import traceback
 import zipfile
 from collections import OrderedDict
-from imp import reload
+
+try:
+    from importlib import reload
+except ImportError:
+    pass
 
 # vendored package imports
 from .external import tomllib
