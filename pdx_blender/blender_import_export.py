@@ -661,7 +661,10 @@ def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
     new_shader.use_nodes = True
 
     new_shader.use_backface_culling = True
-    new_shader.blend_method = "CLIP"
+    try:
+        new_shader.blend_method = "CLIP"
+    except AttributeError:
+        pass
 
     try:  # Blender < 4.3
         # https://developer.blender.org/docs/release_notes/4.3/python_api/#eevee
@@ -1251,12 +1254,40 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                     create_skin(pdx_skin, pdx_bone_list, obj, rig)
 
             if join_materials and len(created) > 1:
-                ctx = bpy.context.copy()
-                ctx["active_object"] = created[0]
-                ctx["selected_editable_objects"] = created
-                with bpy.context.temp_override(**ctx):
-                    bpy.ops.object.join()
-                del ctx
+                override = {
+                    "active_object": created[0],
+                    "selected_editable_objects": created,
+                    "selected_objects": created,
+                }
+                temp_override = getattr(bpy.context, "temp_override", None)
+                if temp_override is not None:
+                    try:
+                        with temp_override(**override):
+                            bpy.ops.object.join()
+                    except Exception as err:
+                        IO_PDX_LOG.warning(
+                            "bpy.ops.object.join() failed with temp_override; retrying with copied context",
+                            exc_info=True,
+                        )
+                        ctx = bpy.context.copy()
+                        ctx.update(override)
+                        try:
+                            bpy.ops.object.join(ctx)
+                        except Exception as fallback_err:
+                            IO_PDX_LOG.error(
+                                "bpy.ops.object.join() also failed with copied context after temp_override failure",
+                                exc_info=True,
+                            )
+                            raise fallback_err from err
+                        finally:
+                            ctx.clear()
+                else:
+                    ctx = bpy.context.copy()
+                    ctx.update(override)
+                    try:
+                        bpy.ops.object.join(ctx)
+                    finally:
+                        ctx.clear()
 
     # go through locators
     if imp_locs and locators:
