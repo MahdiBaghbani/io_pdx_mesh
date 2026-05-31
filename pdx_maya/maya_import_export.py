@@ -947,6 +947,35 @@ def create_mesh(PDX_mesh, name=None):
     # temporary name used during creation
     tmp_mesh_name = "io_pdx_mesh"
 
+    mesh_label = name if name is not None else getattr(PDX_mesh, "name", tmp_mesh_name)
+    invalid_attrs = []
+    for attr, label in (("p", "positions"), ("tri", "triangles")):
+        if not hasattr(PDX_mesh, attr):
+            invalid_attrs.append(f"{attr} ({label})")
+            continue
+        try:
+            attr_len = len(getattr(PDX_mesh, attr))
+        except TypeError:
+            invalid_attrs.append(f"{attr} ({label})")
+            continue
+        if attr_len <= 0 or attr_len % 3 != 0:
+            invalid_attrs.append(f"{attr} ({label})")
+    if invalid_attrs:
+        present_attrs = getattr(PDX_mesh, "attrlist", None)
+        present_attr_text = "unknown"
+        if present_attrs is not None:
+            present_attr_names = [str(attr) for attr in present_attrs[:24]]
+            present_attr_text = ", ".join(present_attr_names) if present_attr_names else "(none)"
+            extra_attr_count = max(len(present_attrs) - len(present_attr_names), 0)
+            if extra_attr_count:
+                present_attr_text += f" (+{extra_attr_count} more)"
+        invalid_attr_text = ", ".join(invalid_attrs)
+        raise RuntimeError(
+            f"Unable to create mesh '{mesh_label}': missing or invalid required geometry attribute(s) "
+            f"{invalid_attr_text}; "
+            f"file may be missing geometry or be corrupted. Present attrs: {present_attr_text}"
+        )
+
     # vertices
     verts = PDX_mesh.p  # flat list of 3d co-ordinates, verts[:2] = vtx[0]
 
