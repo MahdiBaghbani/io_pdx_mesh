@@ -52,3 +52,9 @@ external/numpy_maya/
 test files/
 *.pyc
 .vscode/
+
+# Vendored dependencies installed by scripts/vendor/*
+vendor/pymel_root/pymel/
+vendor/pymel_root/pymel-*.dist-info/
+vendor/pymel_root.tmp/
+vendor/pymel-wheel-download.tmp
