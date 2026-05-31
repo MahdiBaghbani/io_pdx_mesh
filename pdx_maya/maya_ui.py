@@ -78,26 +78,86 @@ def set_widget_icon(widget, icon_name):
 
 def move_dialog_onscreen(dialog):
     QtCore.QCoreApplication.processEvents()
-    screen = QtWidgets.QDesktopWidget().availableGeometry(dialog)
+    screen_rect = None
+
+    if hasattr(QtWidgets, "QDesktopWidget"):
+        try:
+            screen_rect = QtWidgets.QDesktopWidget().availableGeometry(dialog)
+        except Exception:
+            screen_rect = None
+
+    if screen_rect is None:
+        screen = None
+
+        if hasattr(dialog, "screen"):
+            try:
+                screen = dialog.screen()
+            except Exception:
+                screen = None
+
+        frame = dialog.frameGeometry()
+
+        if screen is None:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                screen_at = getattr(app, "screenAt", None)
+                if callable(screen_at):
+                    try:
+                        screen = screen_at(frame.center())
+                    except Exception:
+                        screen = None
+
+                if screen is None:
+                    try:
+                        for candidate in app.screens():
+                            if candidate.availableGeometry().contains(frame.center()):
+                                screen = candidate
+                                break
+                    except Exception:
+                        screen = None
+
+                if screen is None:
+                    try:
+                        screen = app.primaryScreen()
+                    except Exception:
+                        screen = None
+
+        if screen is not None:
+            try:
+                screen_rect = screen.availableGeometry()
+            except Exception:
+                screen_rect = None
+
+    if screen_rect is None:
+        return
+
     frame = dialog.frameGeometry()
-    if not screen.contains(frame, proper=True):
+    if not screen_rect.contains(frame, proper=True):
         x_pos, y_pos = frame.x(), frame.y()
 
-        if not screen.intersects(frame):
+        if not screen_rect.intersects(frame):
             # entirely offscreen, reset
-            dialog.move(screen.x(), screen.y())
+            dialog.move(screen_rect.x(), screen_rect.y())
         else:
             # partially offscreen, move
-            if frame.left() < screen.left():
-                x_pos += screen.left() - frame.left()
-            if frame.right() > screen.right():
-                x_pos += screen.right() - frame.right()
-            if frame.top() < screen.top():
-                y_pos += screen.top() - frame.top()
-            if frame.bottom() > screen.bottom():
-                y_pos += screen.bottom() - frame.bottom()
+            if frame.left() < screen_rect.left():
+                x_pos += screen_rect.left() - frame.left()
+            if frame.right() > screen_rect.right():
+                x_pos += screen_rect.right() - frame.right()
+            if frame.top() < screen_rect.top():
+                y_pos += screen_rect.top() - frame.top()
+            if frame.bottom() > screen_rect.bottom():
+                y_pos += screen_rect.bottom() - frame.bottom()
 
             dialog.move(x_pos, y_pos)
+
+
+def event_global_point(event):
+    global_position = getattr(event, "globalPosition", None)
+    if callable(global_position):
+        return global_position().toPoint()
+
+    return event.globalPos()
 
 
 def HLine():
@@ -220,7 +280,11 @@ class CustomFileDialog(QtWidgets.QFileDialog):
     def runPopup(cls, parent):
         file_dialog = cls(parent)
         file_dialog.show()
-        result = file_dialog.exec_()
+        dialog_exec = getattr(file_dialog, "exec", None)
+        if callable(dialog_exec):
+            result = dialog_exec()
+        else:
+            result = file_dialog.exec_()
 
         return result == QtWidgets.QFileDialog.Accepted, file_dialog.selectedFiles(), file_dialog.selectedOptions()
 
@@ -484,14 +548,15 @@ class PDX_UI(QtWidgets.QDialog):
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self.old_position = event.globalPos()
+            self.old_position = event_global_point(event)
             event.accept()
 
     def mouseMoveEvent(self, event):
         if self.old_position is not None:
-            mouse_delta = event.globalPos() - self.old_position
+            current_position = event_global_point(event)
+            mouse_delta = current_position - self.old_position
             self.move(self.pos() + mouse_delta)
-            self.old_position = event.globalPos()
+            self.old_position = current_position
             event.accept()
 
     def read_ui_settings(self):
