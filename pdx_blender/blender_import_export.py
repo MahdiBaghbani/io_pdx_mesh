@@ -10,6 +10,7 @@ author : ross-g
 """
 
 import os
+import json
 from collections import OrderedDict, defaultdict, namedtuple
 from operator import itemgetter
 from pathlib import Path
@@ -32,6 +33,7 @@ from ..library import (
     PDX_DECIMALPTS,  # noqa: F401
     PDX_IGNOREJOINT,
     PDX_MATERIALINDEX,
+    PDX_MATERIALORDER,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
@@ -903,6 +905,29 @@ def create_material(
     return shader
 
 
+def _get_material_order_hint_from_object(obj):
+    raw = obj.get(PDX_MATERIALORDER)
+    if not raw:
+        return None
+
+    try:
+        order = json.loads(raw)
+    except Exception:
+        return None
+
+    return order if isinstance(order, list) else None
+
+
+def _get_diff_basename_for_material(blender_material):
+    try:
+        tex = get_material_textures(blender_material).get("diff")
+    except RuntimeError:
+        return None
+    if not tex:
+        return None
+    return os.path.split(tex)[1]
+
+
 def create_locator(PDX_locator, PDX_bone_dict):
     # create locator and link to the scene
     locator_name = clean_imported_name(PDX_locator.name)
@@ -1417,6 +1442,7 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
         meshes = node.findall("mesh")
         if imp_mesh and meshes:
             created = []
+            material_order_hint = []
             for mat_idx, m in enumerate(meshes):
                 IO_PDX_LOG.info(f"Creating mesh - {mat_idx}")
                 pdx_mesh = pdx_data.PDXData(m)
@@ -1453,6 +1479,10 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                         diffuse_alpha_threshold=diffuse_alpha_threshold,
                         source_mat_index=mat_idx,
                     )
+                    diff = getattr(pdx_material, "diff", None)
+                    material_order_hint.append(diff[0] if diff else None)
+                else:
+                    material_order_hint.append(None)
 
                 # create the vertex group skin
                 if rig and pdx_skin:
@@ -1494,6 +1524,11 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                         bpy.ops.object.join(ctx)
                     finally:
                         ctx.clear()
+                if material_order_hint:
+                    created[0][PDX_MATERIALORDER] = json.dumps(material_order_hint)
+            elif material_order_hint:
+                for obj in created[:1]:
+                    obj[PDX_MATERIALORDER] = json.dumps(material_order_hint)
 
     # go through locators
     if imp_locs and locators:
@@ -1557,6 +1592,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 objnode_xml.set("lod", [lod_match])
 
             # one object can have multiple materials on a per face basis
+            order_hint = _get_material_order_hint_from_object(obj)
             materials = list(obj.data.materials)
             material_slots = []
             for mat_idx, blender_mat in enumerate(materials):
@@ -1564,7 +1600,14 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 if blender_mat is None or PDX_SHADER not in blender_mat.keys():
                     continue
 
-                sort_index = blender_mat.get(PDX_MATERIALINDEX, mat_idx)
+                sort_index = None
+                if order_hint:
+                    diff_base = _get_diff_basename_for_material(blender_mat)
+                    if diff_base and diff_base in order_hint:
+                        sort_index = order_hint.index(diff_base)
+
+                if sort_index is None:
+                    sort_index = blender_mat.get(PDX_MATERIALINDEX, mat_idx)
                 try:
                     sort_index = int(sort_index)
                 except (TypeError, ValueError):

@@ -9,6 +9,7 @@ author : ross-g
 """
 
 import os
+import json
 from collections import OrderedDict, defaultdict, namedtuple
 from operator import itemgetter
 from pathlib import Path
@@ -36,6 +37,7 @@ from ..library import (
     PDX_DECIMALPTS,
     PDX_IGNOREJOINT,
     PDX_MATERIALINDEX,
+    PDX_MATERIALORDER,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
@@ -791,6 +793,34 @@ def create_material(PDX_material, mesh, texture_folder, source_mat_index=None):
     return shader, group
 
 
+def _get_material_order_hint_from_node(shape):
+    try:
+        parent = pmc.listRelatives(shape, parent=True, type="transform")[0]
+    except Exception:
+        return None
+
+    if not parent.hasAttr(PDX_MATERIALORDER):
+        return None
+
+    raw = getattr(parent, PDX_MATERIALORDER).get()
+    if not raw:
+        return None
+
+    try:
+        order = json.loads(raw)
+    except Exception:
+        return None
+
+    return order if isinstance(order, list) else None
+
+
+def _get_diff_basename_for_shader(maya_material):
+    tex = get_material_textures(maya_material).get("diff")
+    if not tex:
+        return None
+    return os.path.split(tex)[1]
+
+
 def create_locator(PDX_locator, PDX_bone_dict):
     """Creates a Maya Locator object."""
     # create locator
@@ -1326,6 +1356,7 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
         meshes = node.findall("mesh")
         if imp_mesh and meshes:
             created = []
+            material_order_hint = []
             for mat_idx, m in enumerate(meshes):
                 IO_PDX_LOG.info(f"Creating mesh - {mat_idx}")
                 progress("update", 1, "creating mesh")
@@ -1356,6 +1387,10 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                     IO_PDX_LOG.info(f"Creating material - '{pdx_material.shader[0]}'")
                     progress("update", 1, "creating material")
                     create_material(pdx_material, mesh, os.path.split(meshpath)[0], source_mat_index=mat_idx)
+                    diff = getattr(pdx_material, "diff", None)
+                    material_order_hint.append(diff[0] if diff else None)
+                else:
+                    material_order_hint.append(None)
 
                 # create the skin cluster
                 if joints and pdx_skin:
@@ -1370,6 +1405,17 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                 except RuntimeError:  # Maya raises this when using polyUniteSkinned on a group of unskinned meshes
                     joined_mesh = pmc.polyUnite(*created, constructionHistory=False, mergeUVSets=1)[0]
                 pmc.rename(joined_mesh, name)
+                if material_order_hint:
+                    if not joined_mesh.hasAttr(PDX_MATERIALORDER):
+                        pmc.addAttr(joined_mesh, longName=PDX_MATERIALORDER, dataType="string")
+                    getattr(joined_mesh, PDX_MATERIALORDER).set(json.dumps(material_order_hint))
+            elif material_order_hint:
+                # Single mesh (or join disabled). Attach order hint to the mesh transform for export stability.
+                # This is primarily for round-trip preservation when index tags are missing.
+                for obj in created[:1]:
+                    if not obj.hasAttr(PDX_MATERIALORDER):
+                        pmc.addAttr(obj, longName=PDX_MATERIALORDER, dataType="string")
+                    getattr(obj, PDX_MATERIALORDER).set(json.dumps(material_order_hint))
 
     # go through locators
     if imp_locs and locators:
@@ -1443,6 +1489,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 objnode_xml.set("lod", [lod_match])
 
             # one shape can have multiple materials on a per meshface basis
+            order_hint = _get_material_order_hint_from_node(shape)
             shading_groups = []
             seen_groups = set()
             for group in shape.connections(type="shadingEngine"):
@@ -1460,7 +1507,13 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                     continue
                 maya_mat = shaders[0]
                 sort_index = None
-                if maya_mat.hasAttr(PDX_MATERIALINDEX):
+
+                if order_hint:
+                    diff_base = _get_diff_basename_for_shader(maya_mat)
+                    if diff_base and diff_base in order_hint:
+                        sort_index = order_hint.index(diff_base)
+
+                if sort_index is None and maya_mat.hasAttr(PDX_MATERIALINDEX):
                     sort_index = getattr(maya_mat, PDX_MATERIALINDEX).get()
                 if sort_index is None and group.hasAttr(PDX_MATERIALINDEX):
                     sort_index = getattr(group, PDX_MATERIALINDEX).get()
