@@ -30,6 +30,7 @@ paths_exclude_pattern = [
     "__pycache__/",
     "external/numpy_maya/",
     "test files/",
+    "vendor/",
     "*.pyc",
     ".*/",
 ]
