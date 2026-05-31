@@ -1470,17 +1470,17 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 if blender_mat is None or PDX_SHADER not in blender_mat.keys():
                     continue
 
-                # create parent element for this mesh (mesh here being faces sharing a material, within one object)
-                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
-                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
-
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
                     obj, mat_idx, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
                 )
-                # skip material slots that are used on no faces
-                if not (mesh_info_dict and vert_ids):
+                # skip material slots that are used on no faces or have no exportable geometry
+                if not (mesh_info_dict and vert_ids and mesh_info_dict.get("p") and mesh_info_dict.get("tri")):
                     continue
+
+                # create parent element for this mesh (mesh here being faces sharing a material, within one object)
+                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
+                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
 
                 # populate mesh attributes
                 for key in ["p", "n", "ta", "u0", "u1", "u2", "u3", "tri", "boundingsphere"]:

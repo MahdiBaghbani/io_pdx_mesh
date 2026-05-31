@@ -1417,11 +1417,6 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                     continue
                 maya_mat = shaders[0]
 
-                # create parent element for this mesh (mesh here being geometry sharing a material, within one shape)
-                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
-                progress("update", 1, "writing mesh")
-                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
-
                 # check which faces are using this shading group
                 # (groups are shared across shapes, so only select group members that are components of this shape)
                 mesh = [meshface for meshface in group.members(flatten=True) if meshface.node() == shape][0]
@@ -1430,9 +1425,14 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 mesh_info_dict, vert_ids = get_mesh_info(
                     mesh, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
                 )
-                # skip shading groups that are used on no faces
-                if not (mesh_info_dict and vert_ids):
+                # skip shading groups that are used on no faces or have no exportable geometry
+                if not (mesh_info_dict and vert_ids and mesh_info_dict.get("p") and mesh_info_dict.get("tri")):
                     continue
+
+                # create parent element for this mesh (mesh here being geometry sharing a material, within one shape)
+                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
+                progress("update", 1, "writing mesh")
+                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
 
                 # populate mesh attributes
                 for key in ["p", "n", "ta", "u0", "u1", "u2", "u3", "tri", "boundingsphere"]:
