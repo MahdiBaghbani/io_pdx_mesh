@@ -736,7 +736,15 @@ def create_node_texture(node_tree, tex_filepath, as_data=False):
     return teximage_node
 
 
-def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
+def create_shader(
+    PDX_material,
+    shader_name,
+    texture_dir,
+    template_only=False,
+    use_diffuse_alpha=False,
+    diffuse_alpha_mode="CLIP",
+    diffuse_alpha_threshold=0.5,
+):
     """A number of nodes were deprecated and Principled BSDF inputs renamed:
     See - https://wiki.blender.org/wiki/Reference/Release_Notes/4.0/Python_API#Breaking_changes
     """
@@ -746,16 +754,6 @@ def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
     new_shader.use_nodes = True
 
     new_shader.use_backface_culling = True
-    try:
-        new_shader.blend_method = "CLIP"
-    except AttributeError:
-        pass
-
-    try:  # Blender < 4.3
-        # https://developer.blender.org/docs/release_notes/4.3/python_api/#eevee
-        new_shader.shadow_method = "CLIP"
-    except AttributeError:
-        pass  
 
     def set_node_pos(node, x, y):
         node.location = Vector((x * 300.0, y * -300.0))
@@ -774,6 +772,8 @@ def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
         set_node_pos(output, 1, 0)
 
     # link up diffuse texture to base-color slot
+    albedo_texture = None
+    diffuse_has_alpha = False
     if getattr(PDX_material, "diff", None) or template_only:
         texture_path = None if template_only else os.path.join(texture_dir, PDX_material.diff[0])
 
@@ -781,7 +781,47 @@ def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
         set_node_pos(albedo_texture, -5, 0)
 
         links.new(albedo_texture.outputs["Color"], shader_root.inputs["Base Color"])
-        # links.new(albedo_texture.outputs['Alpha'], shader_root.inputs['Alpha'])  # diffuse.A sometimes used for alpha
+        image = getattr(albedo_texture, "image", None)
+        diffuse_has_alpha = image is not None and getattr(image, "channels", 0) >= 4
+
+    if use_diffuse_alpha and albedo_texture is not None and diffuse_has_alpha:
+        alpha_mode = diffuse_alpha_mode if diffuse_alpha_mode in {"CLIP", "BLEND"} else "CLIP"
+        if alpha_mode == "BLEND":
+            links.new(albedo_texture.outputs["Alpha"], shader_root.inputs["Alpha"])
+            try:
+                new_shader.surface_render_method = "BLENDED"
+            except AttributeError:
+                pass
+            try:
+                new_shader.blend_method = "BLEND"
+            except AttributeError:
+                pass
+        else:
+            alpha_clip = node_tree.nodes.new(type="ShaderNodeMath")
+            alpha_clip.operation = "GREATER_THAN"
+            alpha_clip.inputs[1].default_value = diffuse_alpha_threshold
+            set_node_pos(alpha_clip, -4, -1)
+
+            links.new(albedo_texture.outputs["Alpha"], alpha_clip.inputs[0])
+            links.new(alpha_clip.outputs["Value"], shader_root.inputs["Alpha"])
+
+            try:
+                new_shader.surface_render_method = "DITHERED"
+            except AttributeError:
+                pass
+            try:
+                new_shader.blend_method = "CLIP"
+            except AttributeError:
+                pass
+            try:
+                new_shader.alpha_threshold = diffuse_alpha_threshold
+            except AttributeError:
+                pass
+            try:  # Blender < 4.3
+                # https://developer.blender.org/docs/release_notes/4.3/python_api/#eevee
+                new_shader.shadow_method = "CLIP"
+            except AttributeError:
+                pass
 
     # link up specular texture to roughness, metallic and specular slots
     if getattr(PDX_material, "spec", None) or template_only:
@@ -832,9 +872,23 @@ def create_shader(PDX_material, shader_name, texture_dir, template_only=False):
     return new_shader
 
 
-def create_material(PDX_material, mesh, texture_path):
+def create_material(
+    PDX_material,
+    mesh,
+    texture_path,
+    use_diffuse_alpha=False,
+    diffuse_alpha_mode="CLIP",
+    diffuse_alpha_threshold=0.5,
+):
     shader_name = "PDXmat_" + mesh.name
-    shader = create_shader(PDX_material, shader_name, texture_path)
+    shader = create_shader(
+        PDX_material,
+        shader_name,
+        texture_path,
+        use_diffuse_alpha=use_diffuse_alpha,
+        diffuse_alpha_mode=diffuse_alpha_mode,
+        diffuse_alpha_threshold=diffuse_alpha_threshold,
+    )
 
     mesh.materials.append(shader)
 
@@ -1314,6 +1368,9 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
     # kwargs wrangling
     # correct bone orientation on import
     bonespace = kwargs.get("bonespace", False)
+    use_diffuse_alpha = kwargs.get("use_diffuse_alpha", False)
+    diffuse_alpha_mode = kwargs.get("diffuse_alpha_mode", "CLIP")
+    diffuse_alpha_threshold = kwargs.get("diffuse_alpha_threshold", 0.5)
 
     start = perf_counter()
     IO_PDX_LOG.info(f"Importing - '{meshpath}'")
@@ -1377,7 +1434,14 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                 # create the material
                 if pdx_material:
                     IO_PDX_LOG.info(f"Creating material - '{pdx_material.shader[0]}'")
-                    create_material(pdx_material, mesh, os.path.split(meshpath)[0])
+                    create_material(
+                        pdx_material,
+                        mesh,
+                        os.path.split(meshpath)[0],
+                        use_diffuse_alpha=use_diffuse_alpha,
+                        diffuse_alpha_mode=diffuse_alpha_mode,
+                        diffuse_alpha_threshold=diffuse_alpha_threshold,
+                    )
 
                 # create the vertex group skin
                 if rig and pdx_skin:
