@@ -841,7 +841,8 @@ def create_material(PDX_material, mesh, texture_path):
 
 def create_locator(PDX_locator, PDX_bone_dict):
     # create locator and link to the scene
-    new_loc = bpy.data.objects.new(PDX_locator.name, None)
+    locator_name = clean_imported_name(PDX_locator.name)
+    new_loc = bpy.data.objects.new(locator_name, None)
     new_loc.empty_display_type = "PLAIN_AXES"
     new_loc.empty_display_size = 0.4
     new_loc.show_axis = False
@@ -853,17 +854,22 @@ def create_locator(PDX_locator, PDX_bone_dict):
     parent_Xform = None
 
     if parent is not None:
+        imported_parent_name = clean_imported_name(parent[0])
         # parent the locator to a bone in the armature
-        rig = get_rig_from_bone_name(parent[0])
+        rig = get_rig_from_bone_name(imported_parent_name, case_insensitive=True)
         if rig:
+            parent_bone_name = resolve_rig_bone_name(rig, imported_parent_name)
             new_loc.parent = rig
-            new_loc.parent_bone = parent[0]
+            new_loc.parent_bone = parent_bone_name
             new_loc.parent_type = "BONE"
             new_loc.matrix_world = Matrix()  # reset transform after parenting
 
         # determine the locators transform
-        if parent[0] in PDX_bone_dict:
-            transform = PDX_bone_dict[parent[0]]
+        transform = PDX_bone_dict.get(parent[0])
+        if transform is None and imported_parent_name != parent[0]:
+            transform = PDX_bone_dict.get(imported_parent_name)
+
+        if transform is not None:
             # note we transpose the matrix on creation
             parent_Xform = Matrix(
                 (
@@ -881,7 +887,7 @@ def create_locator(PDX_locator, PDX_bone_dict):
                 parent_Xform = Matrix.Translation(loc) @ rot.to_matrix().to_4x4() @ Matrix.Scale(1.0, 4)
         else:
             IO_PDX_LOG.warning(
-                f"Unable to create locator '{PDX_locator.name}' (missing parent '{parent[0]}' in file data)"
+                f"Unable to create locator '{locator_name}' (missing parent '{parent[0]}' in file data)"
             )
             bpy.data.objects.remove(new_loc)
             return

@@ -776,9 +776,10 @@ def create_material(PDX_material, mesh, texture_folder):
 def create_locator(PDX_locator, PDX_bone_dict):
     """Creates a Maya Locator object."""
     # create locator
+    locator_name = clean_imported_name(PDX_locator.name)
     new_loc = pmc.spaceLocator()
     pmc.select(new_loc)
-    pmc.rename(new_loc, PDX_locator.name)
+    pmc.rename(new_loc, locator_name)
 
     # check for parent, then parent locator to scene bone, or apply parents transform
     parent = getattr(PDX_locator, "pa", None)
@@ -786,6 +787,10 @@ def create_locator(PDX_locator, PDX_bone_dict):
 
     if parent is not None:
         parent_bone = pmc.ls(parent[0], type="joint")
+        if not parent_bone:
+            clean_parent_name = clean_imported_name(parent[0])
+            if clean_parent_name != parent[0]:
+                parent_bone = pmc.ls(clean_parent_name, type="joint")
         if parent_bone:
             # parent the locator to a bone in the scene
             pmc.parent(new_loc, parent_bone[0])
@@ -803,7 +808,7 @@ def create_locator(PDX_locator, PDX_bone_dict):
                 # fmt: on
             else:
                 IO_PDX_LOG.warning(
-                    f"Unable to create locator '{PDX_locator.name}' (missing parent '{parent[0]}' in file data)"
+                    f"Unable to create locator '{locator_name}' (missing parent '{parent[0]}' in file data)"
                 )
                 pmc.delete(new_loc)
                 return
