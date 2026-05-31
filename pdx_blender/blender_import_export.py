@@ -39,6 +39,7 @@ from ..library import (
     PDX_ROUND_TRANS,  # noqa: F401
     PDX_SHADER,
     allow_debug_logging,
+    deduplicate_export_locator_names,
     get_lod_level,
 )
 
@@ -510,7 +511,19 @@ def get_bones_info(blender_bones):
 
 def get_locators_info(blender_empties):
     # build a list of locator information dictionaries for the exporter
-    locator_list = [{"name": x.name} for x in blender_empties]
+    original_names = [obj.name for obj in blender_empties]
+    locator_names = deduplicate_export_locator_names(original_names)
+    locator_list = [{"name": name} for name in locator_names]
+    renamed_locators = [
+        (original_name, locator_name)
+        for original_name, locator_name in zip(original_names, locator_names)
+        if original_name != locator_name
+    ]
+
+    if renamed_locators:
+        IO_PDX_LOG.info("Sanitized %d locator export name(s) for export", len(renamed_locators))
+        for original_name, locator_name in renamed_locators:
+            IO_PDX_LOG.debug("Sanitized locator export name '%s' -> '%s'", original_name, locator_name)
 
     for i, obj in enumerate(blender_empties):
         # unparented, use worldspace position/rotation
@@ -828,7 +841,8 @@ def create_material(PDX_material, mesh, texture_path):
 
 def create_locator(PDX_locator, PDX_bone_dict):
     # create locator and link to the scene
-    new_loc = bpy.data.objects.new(PDX_locator.name, None)
+    locator_name = clean_imported_name(PDX_locator.name)
+    new_loc = bpy.data.objects.new(locator_name, None)
     new_loc.empty_display_type = "PLAIN_AXES"
     new_loc.empty_display_size = 0.4
     new_loc.show_axis = False
@@ -840,17 +854,22 @@ def create_locator(PDX_locator, PDX_bone_dict):
     parent_Xform = None
 
     if parent is not None:
+        imported_parent_name = clean_imported_name(parent[0])
         # parent the locator to a bone in the armature
-        rig = get_rig_from_bone_name(parent[0])
+        rig = get_rig_from_bone_name(imported_parent_name, case_insensitive=True)
         if rig:
+            parent_bone_name = resolve_rig_bone_name(rig, imported_parent_name)
             new_loc.parent = rig
-            new_loc.parent_bone = parent[0]
+            new_loc.parent_bone = parent_bone_name
             new_loc.parent_type = "BONE"
             new_loc.matrix_world = Matrix()  # reset transform after parenting
 
         # determine the locators transform
-        if parent[0] in PDX_bone_dict:
-            transform = PDX_bone_dict[parent[0]]
+        transform = PDX_bone_dict.get(parent[0])
+        if transform is None and imported_parent_name != parent[0]:
+            transform = PDX_bone_dict.get(imported_parent_name)
+
+        if transform is not None:
             # note we transpose the matrix on creation
             parent_Xform = Matrix(
                 (
@@ -868,7 +887,7 @@ def create_locator(PDX_locator, PDX_bone_dict):
                 parent_Xform = Matrix.Translation(loc) @ rot.to_matrix().to_4x4() @ Matrix.Scale(1.0, 4)
         else:
             IO_PDX_LOG.warning(
-                f"Unable to create locator '{PDX_locator.name}' (missing parent '{parent[0]}' in file data)"
+                f"Unable to create locator '{locator_name}' (missing parent '{parent[0]}' in file data)"
             )
             bpy.data.objects.remove(new_loc)
             return
@@ -1565,6 +1584,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
         # optionally intersect with selection
         if exp_selected:
             blender_empties = [obj for obj in blender_empties if obj.select_get()]
+        blender_empties = sorted(blender_empties, key=lambda obj: obj.name)
 
         loc_info_list = get_locators_info(blender_empties)
         IO_PDX_LOG.info("Writing locators -")
