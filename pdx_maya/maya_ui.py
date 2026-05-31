@@ -297,13 +297,14 @@ class PDX_UI(QtWidgets.QDialog):
         self.btn_AboutVersion = QtWidgets.QPushButton("", self)
         set_widget_icon(self.btn_AboutVersion, "info.png")
         # update info appears if we aren't at the latest tag version
-        self.btn_UpdateVersion.setVisible(github.AT_LATEST is False)
+        show_update_button = github.AT_LATEST is False and bool(github.get_download_url("maya"))
+        self.btn_UpdateVersion.setVisible(show_update_button)
 
         self.grid_Info.addLayout(self.info_Layout, 0, 0, 1, 3)
         self.grid_Info.addWidget(self.btn_Donate, 1, 0)
         self.grid_Info.addWidget(self.btn_UpdateVersion, 1, 1)
         self.grid_Info.addWidget(self.btn_AboutVersion, 1, 2)
-        self.grid_Info.setColumnStretch(0 if github.AT_LATEST else 1, 1)
+        self.grid_Info.setColumnStretch(1 if show_update_button else 0, 1)
         self.grid_Info.setContentsMargins(0, 0, 0, 0)
         self.grid_Info.setSpacing(4)
 
@@ -461,9 +462,7 @@ class PDX_UI(QtWidgets.QDialog):
         self.spn_AnimationFps.valueChanged.connect(self.set_fps)
 
         self.btn_Close.clicked.connect(self.close)
-        self.btn_UpdateVersion.clicked.connect(
-            partial(webbrowser.open, f"{github.LATEST_URL.get('maya', github.LATEST_RELEASE)}")
-        )
+        self.btn_UpdateVersion.clicked.connect(self.open_update_url)
         self.btn_AboutVersion.clicked.connect(self.show_update_notes)
         self.btn_Donate.clicked.connect(partial(webbrowser.open, IO_PDX_INFO["sponsor_url"]))
         self.help_wiki.clicked.connect(partial(webbrowser.open, IO_PDX_INFO["doc_url"]))
@@ -646,6 +645,12 @@ class PDX_UI(QtWidgets.QDialog):
             txt_lines.append("")
 
         QtWidgets.QMessageBox.information(self, IO_PDX_INFO["name"], "\n".join(txt_lines))
+
+    @QtCore.Slot()
+    def open_update_url(self):
+        update_url = github.get_download_url("maya")
+        if update_url:
+            webbrowser.open(update_url)
 
 
 class MaterialCreatePopup_UI(QtWidgets.QWidget):
