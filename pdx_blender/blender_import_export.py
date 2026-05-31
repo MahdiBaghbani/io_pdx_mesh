@@ -1060,9 +1060,42 @@ def create_skin(PDX_skin, PDX_bones, obj, rig, max_infs=None):
     skin_mod.use_vertex_groups = True
 
 
+def _validate_required_geometry_attrs(PDX_mesh, error_context):
+    invalid_attrs = []
+    for attr, label in (("p", "positions"), ("tri", "triangles")):
+        if not hasattr(PDX_mesh, attr):
+            invalid_attrs.append(f"{attr} ({label})")
+            continue
+        try:
+            attr_len = len(getattr(PDX_mesh, attr))
+        except TypeError:
+            invalid_attrs.append(f"{attr} ({label})")
+            continue
+        if attr_len <= 0 or attr_len % 3 != 0:
+            invalid_attrs.append(f"{attr} ({label})")
+    if invalid_attrs:
+        present_attrs = getattr(PDX_mesh, "attrlist", None)
+        present_attr_text = "unknown"
+        if present_attrs is not None:
+            present_attr_names = [str(attr) for attr in present_attrs[:24]]
+            present_attr_text = ", ".join(present_attr_names) if present_attr_names else "(none)"
+            extra_attr_count = max(len(present_attrs) - len(present_attr_names), 0)
+            if extra_attr_count:
+                present_attr_text += f" (+{extra_attr_count} more)"
+        invalid_attr_text = ", ".join(invalid_attrs)
+        raise RuntimeError(
+            f"{error_context}: missing or invalid required geometry attribute(s) "
+            f"{invalid_attr_text}; "
+            f"file may be missing geometry or be corrupted. Present attrs: {present_attr_text}"
+        )
+
+
 def create_mesh(PDX_mesh, name=None):
     # temporary name used during creation
     tmp_mesh_name = "io_pdx_mesh"
+
+    mesh_label = name if name is not None else getattr(PDX_mesh, "name", tmp_mesh_name)
+    _validate_required_geometry_attrs(PDX_mesh, f"Unable to create mesh '{mesh_label}'")
 
     # vertices
     verts = PDX_mesh.p  # flat list of 3d co-ordinates, verts[:2] = vtx[0]
@@ -1309,6 +1342,13 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                     meshmaterial_name = node.tag if mat_idx == 0 else f"{node.tag}-{mat_idx:0>3}"
                 else:
                     meshmaterial_name = f"{node.tag}-{mat_idx:0>3}"
+                _validate_required_geometry_attrs(
+                    pdx_mesh,
+                    (
+                        f"Unable to import mesh '{meshmaterial_name}' "
+                        f"from node '{node.tag}' material {mat_idx}"
+                    ),
+                )
                 mesh, obj = create_mesh(pdx_mesh, name=meshmaterial_name)
                 created.append(obj)
 
@@ -1430,17 +1470,17 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 if blender_mat is None or PDX_SHADER not in blender_mat.keys():
                     continue
 
-                # create parent element for this mesh (mesh here being faces sharing a material, within one object)
-                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
-                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
-
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
                     obj, mat_idx, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
                 )
-                # skip material slots that are used on no faces
-                if not (mesh_info_dict and vert_ids):
+                # skip material slots that are used on no faces or have no exportable geometry
+                if not (mesh_info_dict and vert_ids and mesh_info_dict.get("p") and mesh_info_dict.get("tri")):
                     continue
+
+                # create parent element for this mesh (mesh here being faces sharing a material, within one object)
+                IO_PDX_LOG.info(f"Writing mesh - {mat_idx}")
+                meshnode_xml = Xml.SubElement(objnode_xml, "mesh")
 
                 # populate mesh attributes
                 for key in ["p", "n", "ta", "u0", "u1", "u2", "u3", "tri", "boundingsphere"]:
