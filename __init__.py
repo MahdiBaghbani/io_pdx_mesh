@@ -123,6 +123,31 @@ else:
         IO_PDX_INFO["unsupported_version"] = True
 
     try:
+        vendor_pymel_root = path.join(root_path, "vendor", "pymel_root")
+        vendor_pymel_package = path.join(vendor_pymel_root, "pymel")
+
+        if not path.isdir(vendor_pymel_package):
+            msg = (
+                "Vendored PyMEL is required for Maya support but was not found under "
+                "io_pdx_mesh/vendor/pymel_root. Run sh scripts/vendor/install_pymel_vendor.sh "
+                "or scripts/vendor/install_pymel_vendor.bat from the io_pdx_mesh repo."
+            )
+            raise ImportError(msg)
+
+        if vendor_pymel_root in sys.path:
+            sys.path.remove(vendor_pymel_root)
+        sys.path.insert(0, vendor_pymel_root)
+
+        try:
+            import pymel.core  # noqa: F401
+        except ImportError as pymel_import_error:
+            msg = (
+                "Vendored PyMEL is required for Maya support. Run "
+                "sh scripts/vendor/install_pymel_vendor.sh or "
+                "scripts/vendor/install_pymel_vendor.bat from the io_pdx_mesh repo."
+            )
+            raise ImportError(msg) from pymel_import_error
+
         # launch the Maya UI
         from .pdx_maya import maya_ui
 
