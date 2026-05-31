@@ -739,18 +739,17 @@ class IOPDX_PT_PDXblender_info(PDXUI, Panel):
 
     def draw(self, context):
         self.layout.label(text=f"PDX Blender Tools - v{github.CURRENT_VERSION}", icon="TOOL_SETTINGS")
+        update_url = github.get_download_url("blender")
 
         row = self.layout.row(align=True)
         split = row.split(factor=0.85, align=True)
         col1, col3 = split.column(align=True), split.column(align=True)
         # update info appears if we aren't at the latest tag version
-        if github.AT_LATEST is False:
+        if github.AT_LATEST is False and update_url:
             split = col1.split(factor=0.4, align=True)
             col1, col2 = split.column(align=True), split.column(align=True)
             btn_txt = f"UPDATE - v{github.LATEST_VERSION}"
-            col2.operator("wm.url_open", icon="OUTLINER_OB_LIGHT", text=btn_txt).url = str(
-                github.LATEST_URL.get("blender", github.LATEST_RELEASE)
-            )
+            col2.operator("wm.url_open", icon="OUTLINER_OB_LIGHT", text=btn_txt).url = update_url
         col1.operator("wm.url_open", icon="FUND", text="Donate").url = str(IO_PDX_INFO["sponsor_url"])
         popup = col3.operator("io_pdx_mesh.popup_message", icon="INFO", text="")
         popup.msg_text = github.LATEST_NOTES
