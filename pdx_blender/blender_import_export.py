@@ -522,7 +522,44 @@ def get_locators_info(blender_empties):
 
 
 def get_skeleton_hierarchy(rig):
-    root_bone = rig.data.bones[0]
+    if not rig.data.bones:
+        raise RuntimeError("Found no bones in armature for export.")
+
+    parentless_bones = [bone for bone in rig.data.bones if bone.parent is None]
+    root_candidates = [bone for bone in rig.data.bones if bone.parent is None and not bone.get(PDX_IGNOREJOINT)]
+
+    if not root_candidates:
+        parentless_names = ", ".join(bone.name for bone in parentless_bones)
+        raise RuntimeError(
+            "Unable to resolve a root bone for the skeleton. "
+            f"Parentless bones are all ignored: {parentless_names}. "
+            "Unignore one root or reparent controls."
+        )
+
+    def is_ancestor(ancestor, bone):
+        current = bone
+        while current is not None:
+            if current == ancestor:
+                return True
+            current = current.parent
+
+        return False
+
+    if len(root_candidates) == 1:
+        root_bone = root_candidates[0]
+    else:
+        deform_bones = [bone for bone in rig.data.bones if bone.use_deform and not bone.get(PDX_IGNOREJOINT)]
+        deform_roots = [bone for bone in root_candidates if bone.use_deform]
+        ancestor_roots = [bone for bone in deform_roots if all(is_ancestor(bone, deform) for deform in deform_bones)]
+
+        if len(ancestor_roots) == 1:
+            root_bone = ancestor_roots[0]
+        else:
+            candidate_names = ", ".join(bone.name for bone in root_candidates)
+            raise RuntimeError(
+                "Unable to resolve a single root bone for the skeleton: "
+                f"{candidate_names}. Mark controls ignored with '{PDX_IGNOREJOINT}' or reparent controls."
+            )
 
     def get_recursive_children(bone, hierarchy):
         hierarchy.append(bone)
