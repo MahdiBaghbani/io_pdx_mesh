@@ -33,13 +33,13 @@ from ..library import (
     PDX_DECIMALPTS,  # noqa: F401
     PDX_IGNOREJOINT,
     PDX_MATERIALINDEX,
-    PDX_MATERIALORDER,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
     PDX_ROUND_ROT,  # noqa: F401
     PDX_ROUND_SCALE,
     PDX_ROUND_TRANS,  # noqa: F401
+    PDX_ROUNDTRIPDATA,
     PDX_SHADER,
     allow_debug_logging,
     deduplicate_export_locator_names,
@@ -256,7 +256,34 @@ def get_material_textures(blender_material):
     return texture_dict
 
 
-def get_mesh_info(blender_obj, mat_id, split_criteria=None, split_all=False, sort_vertices=True):
+def _rotate_triangles_to_starts(tri_values, triangle_starts):
+    if not triangle_starts or len(triangle_starts) * 3 != len(tri_values):
+        return
+
+    for tri_idx, start in enumerate(triangle_starts):
+        try:
+            start = int(start)
+        except (TypeError, ValueError):
+            continue
+
+        offset = tri_idx * 3
+        tri = tri_values[offset : offset + 3]
+        if tri[0] == start:
+            continue
+        if tri[1] == start:
+            tri_values[offset : offset + 3] = [tri[1], tri[2], tri[0]]
+        elif tri[2] == start:
+            tri_values[offset : offset + 3] = [tri[2], tri[0], tri[1]]
+
+
+def get_mesh_info(
+    blender_obj,
+    mat_id,
+    split_criteria=None,
+    split_all=False,
+    sort_vertices=True,
+    triangle_starts=None,
+):
     """Returns a dictionary of mesh information neccessary to the exporter.
 
     This performs a tri-split on all points to create unique vertices where points have split UV or Normal data.
@@ -370,6 +397,8 @@ def get_mesh_info(blender_obj, mat_id, split_criteria=None, split_all=False, sor
             # to build the tri-face correctly, we need to use the original unsorted vertex order to reference verts
             [dict_vert_idx[indices[0]], dict_vert_idx[indices[2]], dict_vert_idx[indices[1]]]
         )
+
+    _rotate_triangles_to_starts(mesh_dict["tri"], triangle_starts)
 
     if not export_verts:
         # no mesh data collected?
@@ -905,17 +934,50 @@ def create_material(
     return shader
 
 
-def _get_material_order_hint_from_object(obj):
-    raw = obj.get(PDX_MATERIALORDER)
+def _get_roundtrip_data_from_object(obj):
+    raw = obj.get(PDX_ROUNDTRIPDATA)
     if not raw:
         return None
 
     try:
-        order = json.loads(raw)
+        data = json.loads(raw)
     except Exception:
         return None
 
-    return order if isinstance(order, list) else None
+    return data if isinstance(data, dict) else None
+
+
+def _get_roundtrip_materials(roundtrip_data):
+    if not roundtrip_data:
+        return []
+    materials = roundtrip_data.get("materials")
+    return materials if isinstance(materials, list) else []
+
+
+def _get_roundtrip_material_entry(roundtrip_data, diff_base=None, source_index=None):
+    materials = _get_roundtrip_materials(roundtrip_data)
+    if diff_base:
+        for entry in materials:
+            if isinstance(entry, dict) and entry.get("diff") == diff_base:
+                return entry
+
+    try:
+        source_index = int(source_index)
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= source_index < len(materials) and isinstance(materials[source_index], dict):
+        return materials[source_index]
+
+    return None
+
+
+def _get_roundtrip_material_index(roundtrip_data, entry):
+    materials = _get_roundtrip_materials(roundtrip_data)
+    try:
+        return materials.index(entry)
+    except ValueError:
+        return None
 
 
 def _get_diff_basename_for_material(blender_material):
@@ -926,6 +988,16 @@ def _get_diff_basename_for_material(blender_material):
     if not tex:
         return None
     return os.path.split(tex)[1]
+
+
+def _get_pdx_triangle_starts(PDX_mesh):
+    tri = getattr(PDX_mesh, "tri", None)
+    return list(tri[0::3]) if tri else []
+
+
+def _get_pdx_material_diff(PDX_material):
+    diff = getattr(PDX_material, "diff", None)
+    return diff[0] if diff else None
 
 
 def create_locator(PDX_locator, PDX_bone_dict):
@@ -1442,12 +1514,18 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
         meshes = node.findall("mesh")
         if imp_mesh and meshes:
             created = []
-            material_order_hint = []
+            roundtrip_data = {"version": 1, "materials": []}
             for mat_idx, m in enumerate(meshes):
                 IO_PDX_LOG.info(f"Creating mesh - {mat_idx}")
                 pdx_mesh = pdx_data.PDXData(m)
                 pdx_material = getattr(pdx_mesh, "material", None)
                 pdx_skin = getattr(pdx_mesh, "skin", None)
+                roundtrip_data["materials"].append(
+                    {
+                        "diff": _get_pdx_material_diff(pdx_material) if pdx_material else None,
+                        "triangle_starts": _get_pdx_triangle_starts(pdx_mesh),
+                    }
+                )
 
                 # create the geometry
                 if join_materials:
@@ -1479,10 +1557,6 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                         diffuse_alpha_threshold=diffuse_alpha_threshold,
                         source_mat_index=mat_idx,
                     )
-                    diff = getattr(pdx_material, "diff", None)
-                    material_order_hint.append(diff[0] if diff else None)
-                else:
-                    material_order_hint.append(None)
 
                 # create the vertex group skin
                 if rig and pdx_skin:
@@ -1524,11 +1598,11 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                         bpy.ops.object.join(ctx)
                     finally:
                         ctx.clear()
-                if material_order_hint:
-                    created[0][PDX_MATERIALORDER] = json.dumps(material_order_hint)
-            elif material_order_hint:
+                if roundtrip_data["materials"]:
+                    created[0][PDX_ROUNDTRIPDATA] = json.dumps(roundtrip_data)
+            elif roundtrip_data["materials"]:
                 for obj in created[:1]:
-                    obj[PDX_MATERIALORDER] = json.dumps(material_order_hint)
+                    obj[PDX_ROUNDTRIPDATA] = json.dumps(roundtrip_data)
 
     # go through locators
     if imp_locs and locators:
@@ -1592,7 +1666,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 objnode_xml.set("lod", [lod_match])
 
             # one object can have multiple materials on a per face basis
-            order_hint = _get_material_order_hint_from_object(obj)
+            roundtrip_data = _get_roundtrip_data_from_object(obj)
             materials = list(obj.data.materials)
             material_slots = []
             for mat_idx, blender_mat in enumerate(materials):
@@ -1601,10 +1675,14 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                     continue
 
                 sort_index = None
-                if order_hint:
-                    diff_base = _get_diff_basename_for_material(blender_mat)
-                    if diff_base and diff_base in order_hint:
-                        sort_index = order_hint.index(diff_base)
+                diff_base = _get_diff_basename_for_material(blender_mat)
+                roundtrip_entry = _get_roundtrip_material_entry(
+                    roundtrip_data,
+                    diff_base=diff_base,
+                    source_index=blender_mat.get(PDX_MATERIALINDEX),
+                )
+                if roundtrip_entry:
+                    sort_index = _get_roundtrip_material_index(roundtrip_data, roundtrip_entry)
 
                 if sort_index is None:
                     sort_index = blender_mat.get(PDX_MATERIALINDEX, mat_idx)
@@ -1613,15 +1691,23 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 except (TypeError, ValueError):
                     sort_index = mat_idx
 
-                material_slots.append((sort_index, mat_idx, blender_mat))
+                material_slots.append((sort_index, mat_idx, blender_mat, roundtrip_entry))
 
             material_slots.sort(key=lambda t: (t[0], t[1]))
 
-            for _, mat_idx, blender_mat in material_slots:
+            for _, mat_idx, blender_mat, roundtrip_entry in material_slots:
+                triangle_starts = None
+                if roundtrip_entry:
+                    triangle_starts = roundtrip_entry.get("triangle_starts")
 
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
-                    obj, mat_idx, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
+                    obj,
+                    mat_idx,
+                    split_criteria=split_by,
+                    split_all=split_verts,
+                    sort_vertices=sort_verts,
+                    triangle_starts=triangle_starts,
                 )
                 # skip material slots that are used on no faces or have no exportable geometry
                 if not (mesh_info_dict and vert_ids and mesh_info_dict.get("p") and mesh_info_dict.get("tri")):

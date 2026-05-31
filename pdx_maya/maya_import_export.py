@@ -33,17 +33,13 @@ from maya.api.OpenMaya import MMatrix, MQuaternion, MTransformationMatrix, MVect
 
 from .. import IO_PDX_LOG, pdx_data
 from ..library import (
-    PDX_ANIMATION,
-    PDX_DECIMALPTS,
     PDX_IGNOREJOINT,
     PDX_MATERIALINDEX,
-    PDX_MATERIALORDER,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
-    PDX_ROUND_ROT,
     PDX_ROUND_SCALE,
-    PDX_ROUND_TRANS,
+    PDX_ROUNDTRIPDATA,
     PDX_SHADER,
     allow_debug_logging,
     deduplicate_export_locator_names,
@@ -288,7 +284,27 @@ def get_material_textures(maya_material):
     return texture_dict
 
 
-def get_mesh_info(maya_mesh, split_criteria=None, split_all=False, sort_vertices=True):
+def _rotate_triangles_to_starts(tri_values, triangle_starts):
+    if not triangle_starts or len(triangle_starts) * 3 != len(tri_values):
+        return
+
+    for tri_idx, start in enumerate(triangle_starts):
+        try:
+            start = int(start)
+        except (TypeError, ValueError):
+            continue
+
+        offset = tri_idx * 3
+        tri = tri_values[offset : offset + 3]
+        if tri[0] == start:
+            continue
+        if tri[1] == start:
+            tri_values[offset : offset + 3] = [tri[1], tri[2], tri[0]]
+        elif tri[2] == start:
+            tri_values[offset : offset + 3] = [tri[2], tri[0], tri[1]]
+
+
+def get_mesh_info(maya_mesh, split_criteria=None, split_all=False, sort_vertices=True, triangle_starts=None):
     """Returns a dictionary of mesh information neccessary to the exporter.
 
     This performs a tri-split on all points to create unique vertices where points have split UV or Normal data.
@@ -421,6 +437,8 @@ def get_mesh_info(maya_mesh, split_criteria=None, split_all=False, sort_vertices
                 # to build the tri-face correctly, we need to use the original unsorted vertex order to reference verts
                 [dict_vert_idx[indices[0]], dict_vert_idx[indices[2]], dict_vert_idx[indices[1]]]
             )
+
+    _rotate_triangles_to_starts(mesh_dict["tri"], triangle_starts)
 
     if not export_verts:
         # no mesh data collected?
@@ -793,25 +811,58 @@ def create_material(PDX_material, mesh, texture_folder, source_mat_index=None):
     return shader, group
 
 
-def _get_material_order_hint_from_node(shape):
+def _get_roundtrip_data_from_node(shape):
     try:
         parent = pmc.listRelatives(shape, parent=True, type="transform")[0]
     except Exception:
         return None
 
-    if not parent.hasAttr(PDX_MATERIALORDER):
+    if not parent.hasAttr(PDX_ROUNDTRIPDATA):
         return None
 
-    raw = getattr(parent, PDX_MATERIALORDER).get()
+    raw = getattr(parent, PDX_ROUNDTRIPDATA).get()
     if not raw:
         return None
 
     try:
-        order = json.loads(raw)
+        data = json.loads(raw)
     except Exception:
         return None
 
-    return order if isinstance(order, list) else None
+    return data if isinstance(data, dict) else None
+
+
+def _get_roundtrip_materials(roundtrip_data):
+    if not roundtrip_data:
+        return []
+    materials = roundtrip_data.get("materials")
+    return materials if isinstance(materials, list) else []
+
+
+def _get_roundtrip_material_entry(roundtrip_data, diff_base=None, source_index=None):
+    materials = _get_roundtrip_materials(roundtrip_data)
+    if diff_base:
+        for entry in materials:
+            if isinstance(entry, dict) and entry.get("diff") == diff_base:
+                return entry
+
+    try:
+        source_index = int(source_index)
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= source_index < len(materials) and isinstance(materials[source_index], dict):
+        return materials[source_index]
+
+    return None
+
+
+def _get_roundtrip_material_index(roundtrip_data, entry):
+    materials = _get_roundtrip_materials(roundtrip_data)
+    try:
+        return materials.index(entry)
+    except ValueError:
+        return None
 
 
 def _get_diff_basename_for_shader(maya_material):
@@ -819,6 +870,16 @@ def _get_diff_basename_for_shader(maya_material):
     if not tex:
         return None
     return os.path.split(tex)[1]
+
+
+def _get_pdx_triangle_starts(PDX_mesh):
+    tri = getattr(PDX_mesh, "tri", None)
+    return list(tri[0::3]) if tri else []
+
+
+def _get_pdx_material_diff(PDX_material):
+    diff = getattr(PDX_material, "diff", None)
+    return diff[0] if diff else None
 
 
 def create_locator(PDX_locator, PDX_bone_dict):
@@ -1356,13 +1417,19 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
         meshes = node.findall("mesh")
         if imp_mesh and meshes:
             created = []
-            material_order_hint = []
+            roundtrip_data = {"version": 1, "materials": []}
             for mat_idx, m in enumerate(meshes):
                 IO_PDX_LOG.info(f"Creating mesh - {mat_idx}")
                 progress("update", 1, "creating mesh")
                 pdx_mesh = pdx_data.PDXData(m)
                 pdx_material = getattr(pdx_mesh, "material", None)
                 pdx_skin = getattr(pdx_mesh, "skin", None)
+                roundtrip_data["materials"].append(
+                    {
+                        "diff": _get_pdx_material_diff(pdx_material) if pdx_material else None,
+                        "triangle_starts": _get_pdx_triangle_starts(pdx_mesh),
+                    }
+                )
 
                 # create the geometry
                 if join_materials:
@@ -1387,10 +1454,6 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                     IO_PDX_LOG.info(f"Creating material - '{pdx_material.shader[0]}'")
                     progress("update", 1, "creating material")
                     create_material(pdx_material, mesh, os.path.split(meshpath)[0], source_mat_index=mat_idx)
-                    diff = getattr(pdx_material, "diff", None)
-                    material_order_hint.append(diff[0] if diff else None)
-                else:
-                    material_order_hint.append(None)
 
                 # create the skin cluster
                 if joints and pdx_skin:
@@ -1405,17 +1468,15 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                 except RuntimeError:  # Maya raises this when using polyUniteSkinned on a group of unskinned meshes
                     joined_mesh = pmc.polyUnite(*created, constructionHistory=False, mergeUVSets=1)[0]
                 pmc.rename(joined_mesh, name)
-                if material_order_hint:
-                    if not joined_mesh.hasAttr(PDX_MATERIALORDER):
-                        pmc.addAttr(joined_mesh, longName=PDX_MATERIALORDER, dataType="string")
-                    getattr(joined_mesh, PDX_MATERIALORDER).set(json.dumps(material_order_hint))
-            elif material_order_hint:
-                # Single mesh (or join disabled). Attach order hint to the mesh transform for export stability.
-                # This is primarily for round-trip preservation when index tags are missing.
+                if roundtrip_data["materials"]:
+                    if not joined_mesh.hasAttr(PDX_ROUNDTRIPDATA):
+                        pmc.addAttr(joined_mesh, longName=PDX_ROUNDTRIPDATA, dataType="string")
+                    getattr(joined_mesh, PDX_ROUNDTRIPDATA).set(json.dumps(roundtrip_data))
+            elif roundtrip_data["materials"]:
                 for obj in created[:1]:
-                    if not obj.hasAttr(PDX_MATERIALORDER):
-                        pmc.addAttr(obj, longName=PDX_MATERIALORDER, dataType="string")
-                    getattr(obj, PDX_MATERIALORDER).set(json.dumps(material_order_hint))
+                    if not obj.hasAttr(PDX_ROUNDTRIPDATA):
+                        pmc.addAttr(obj, longName=PDX_ROUNDTRIPDATA, dataType="string")
+                    getattr(obj, PDX_ROUNDTRIPDATA).set(json.dumps(roundtrip_data))
 
     # go through locators
     if imp_locs and locators:
@@ -1489,7 +1550,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 objnode_xml.set("lod", [lod_match])
 
             # one shape can have multiple materials on a per meshface basis
-            order_hint = _get_material_order_hint_from_node(shape)
+            roundtrip_data = _get_roundtrip_data_from_node(shape)
             shading_groups = []
             seen_groups = set()
             for group in shape.connections(type="shadingEngine"):
@@ -1507,16 +1568,23 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                     continue
                 maya_mat = shaders[0]
                 sort_index = None
+                source_index = None
+                if maya_mat.hasAttr(PDX_MATERIALINDEX):
+                    source_index = getattr(maya_mat, PDX_MATERIALINDEX).get()
+                if source_index is None and group.hasAttr(PDX_MATERIALINDEX):
+                    source_index = getattr(group, PDX_MATERIALINDEX).get()
 
-                if order_hint:
-                    diff_base = _get_diff_basename_for_shader(maya_mat)
-                    if diff_base and diff_base in order_hint:
-                        sort_index = order_hint.index(diff_base)
+                diff_base = _get_diff_basename_for_shader(maya_mat)
+                roundtrip_entry = _get_roundtrip_material_entry(
+                    roundtrip_data,
+                    diff_base=diff_base,
+                    source_index=source_index,
+                )
+                if roundtrip_entry:
+                    sort_index = _get_roundtrip_material_index(roundtrip_data, roundtrip_entry)
 
-                if sort_index is None and maya_mat.hasAttr(PDX_MATERIALINDEX):
-                    sort_index = getattr(maya_mat, PDX_MATERIALINDEX).get()
-                if sort_index is None and group.hasAttr(PDX_MATERIALINDEX):
-                    sort_index = getattr(group, PDX_MATERIALINDEX).get()
+                if sort_index is None:
+                    sort_index = source_index
                 try:
                     sort_index = int(sort_index) if sort_index is not None else None
                 except (TypeError, ValueError):
@@ -1532,6 +1600,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                         group.name(),
                         group,
                         maya_mat,
+                        roundtrip_entry,
                     )
                 )
 
@@ -1544,7 +1613,12 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                     PDX_MATERIALINDEX,
                 )
 
-            for mat_idx, (_sort_index, _mat_name, _group_name, group, maya_mat) in enumerate(shading_groups_sorted):
+            for mat_idx, (_sort_index, _mat_name, _group_name, group, maya_mat, roundtrip_entry) in enumerate(
+                shading_groups_sorted
+            ):
+                triangle_starts = None
+                if roundtrip_entry:
+                    triangle_starts = roundtrip_entry.get("triangle_starts")
 
                 # check which faces are using this shading group
                 # (groups are shared across shapes, so only select group members that are components of this shape)
@@ -1555,7 +1629,11 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
 
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
-                    mesh, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
+                    mesh,
+                    split_criteria=split_by,
+                    split_all=split_verts,
+                    sort_vertices=sort_verts,
+                    triangle_starts=triangle_starts,
                 )
                 # skip shading groups that are used on no faces or have no exportable geometry
                 if not (mesh_info_dict and vert_ids and mesh_info_dict.get("p") and mesh_info_dict.get("tri")):

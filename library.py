@@ -14,7 +14,7 @@ PDX_ANIMATION = "animation"
 PDX_IGNOREJOINT = "pdxIgnoreJoint"
 PDX_MESHINDEX = "meshindex"
 PDX_MATERIALINDEX = "pdxMaterialIndex"
-PDX_MATERIALORDER = "pdxMaterialOrder"
+PDX_ROUNDTRIPDATA = "pdxRoundTripData"
 PDX_MAXSKININFS = 4
 PDX_MAXUVSETS = 4
 
