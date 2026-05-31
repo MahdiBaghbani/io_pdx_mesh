@@ -152,6 +152,14 @@ def move_dialog_onscreen(dialog):
             dialog.move(x_pos, y_pos)
 
 
+def event_global_point(event):
+    global_position = getattr(event, "globalPosition", None)
+    if callable(global_position):
+        return global_position().toPoint()
+
+    return event.globalPos()
+
+
 def HLine():
     line = QtWidgets.QFrame()
     line.setFrameShape(QtWidgets.QFrame.HLine)
@@ -272,7 +280,11 @@ class CustomFileDialog(QtWidgets.QFileDialog):
     def runPopup(cls, parent):
         file_dialog = cls(parent)
         file_dialog.show()
-        result = file_dialog.exec_()
+        dialog_exec = getattr(file_dialog, "exec", None)
+        if callable(dialog_exec):
+            result = dialog_exec()
+        else:
+            result = file_dialog.exec_()
 
         return result == QtWidgets.QFileDialog.Accepted, file_dialog.selectedFiles(), file_dialog.selectedOptions()
 
@@ -536,14 +548,15 @@ class PDX_UI(QtWidgets.QDialog):
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self.old_position = event.globalPos()
+            self.old_position = event_global_point(event)
             event.accept()
 
     def mouseMoveEvent(self, event):
         if self.old_position is not None:
-            mouse_delta = event.globalPos() - self.old_position
+            current_position = event_global_point(event)
+            mouse_delta = current_position - self.old_position
             self.move(self.pos() + mouse_delta)
-            self.old_position = event.globalPos()
+            self.old_position = current_position
             event.accept()
 
     def read_ui_settings(self):
