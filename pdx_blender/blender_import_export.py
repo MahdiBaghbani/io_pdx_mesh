@@ -1060,11 +1060,7 @@ def create_skin(PDX_skin, PDX_bones, obj, rig, max_infs=None):
     skin_mod.use_vertex_groups = True
 
 
-def create_mesh(PDX_mesh, name=None):
-    # temporary name used during creation
-    tmp_mesh_name = "io_pdx_mesh"
-
-    mesh_label = name if name is not None else getattr(PDX_mesh, "name", tmp_mesh_name)
+def _validate_required_geometry_attrs(PDX_mesh, error_context):
     invalid_attrs = []
     for attr, label in (("p", "positions"), ("tri", "triangles")):
         if not hasattr(PDX_mesh, attr):
@@ -1088,10 +1084,18 @@ def create_mesh(PDX_mesh, name=None):
                 present_attr_text += f" (+{extra_attr_count} more)"
         invalid_attr_text = ", ".join(invalid_attrs)
         raise RuntimeError(
-            f"Unable to create mesh '{mesh_label}': missing or invalid required geometry attribute(s) "
+            f"{error_context}: missing or invalid required geometry attribute(s) "
             f"{invalid_attr_text}; "
             f"file may be missing geometry or be corrupted. Present attrs: {present_attr_text}"
         )
+
+
+def create_mesh(PDX_mesh, name=None):
+    # temporary name used during creation
+    tmp_mesh_name = "io_pdx_mesh"
+
+    mesh_label = name if name is not None else getattr(PDX_mesh, "name", tmp_mesh_name)
+    _validate_required_geometry_attrs(PDX_mesh, f"Unable to create mesh '{mesh_label}'")
 
     # vertices
     verts = PDX_mesh.p  # flat list of 3d co-ordinates, verts[:2] = vtx[0]
@@ -1338,6 +1342,13 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                     meshmaterial_name = node.tag if mat_idx == 0 else f"{node.tag}-{mat_idx:0>3}"
                 else:
                     meshmaterial_name = f"{node.tag}-{mat_idx:0>3}"
+                _validate_required_geometry_attrs(
+                    pdx_mesh,
+                    (
+                        f"Unable to import mesh '{meshmaterial_name}' "
+                        f"from node '{node.tag}' material {mat_idx}"
+                    ),
+                )
                 mesh, obj = create_mesh(pdx_mesh, name=meshmaterial_name)
                 created.append(obj)
 
