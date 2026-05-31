@@ -33,9 +33,22 @@ for screenshots, setup notes, and other documentation.
 - Go to your Maya user scripts path. (eg on Windows:
   `C:\Users\...\Documents\maya\scripts`)
 - Extract the contents of the zip file directly into this path.
+- PyMEL is required for Maya. Do not run `pip install pymel`.
+- Instead, use the repo vendor scripts to download PyMEL into
+  `vendor/pymel_root`:
+  - Windows: run `scripts\vendor\install_pymel_vendor.bat`
+  - Linux/macOS: run `sh scripts/vendor/install_pymel_vendor.sh`
+- `scripts/vendor/vendor.env` stores the pinned default owner, repo, and
+  version, and you can override them if needed.
 - Start Maya and change the `Command Line` to Python by clicking the label.
-- Then use the command `import io_pdx_mesh;reload(io_pdx_mesh)` to launch the
-  tool.
+- Then use this Python 3 command to launch the tool:
+
+  ```python
+  import importlib
+  import io_pdx_mesh
+  importlib.reload(io_pdx_mesh)
+  ```
+
 - You can highlight this command and use the middle-mouse button to drag it
   into a shelf button to save it.
 - The tool window will now open.
@@ -54,6 +67,13 @@ for screenshots, setup notes, and other documentation.
   `Sidebar` of the `3D Viewport`. (`View > Sidebar` if you have it closed)
 - The `Sidebar` will now have a `PDX Blender Tools` tab.
 
+### Workflow notes
+
+- Issue #15: the exporter writes meshes from the tool's PDX
+  material/shader property workflow, not arbitrary Blender materials.
+- Issue #112: `Unknown file header` usually means the file is not a supported
+  PDX mesh or animation file. Verify the file source first.
+
 ---
 
 ### Supporters
@@ -63,4 +83,4 @@ El Tyranos, creator of CK3's [Community Flavor Pack](https://communityflavorpack
 Kindly provided a PyCharm license from JetBrains for [Open Source
 projects](https://jb.gg/OpenSourceSupport).
 
-<img src="https://resources.jetbrains.com/storage/products/company/brand/logos/PyCharm_icon.png" alt="PyCharm logo." width="50" height="50">
+![PyCharm logo.](https://resources.jetbrains.com/storage/products/company/brand/logos/PyCharm_icon.png)
