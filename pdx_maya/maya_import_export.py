@@ -675,14 +675,15 @@ def get_scene_animdata(export_bones, startframe, endframe):
 
 def swap_coord_space(data, space_mat=SPACE_MATRIX, space_mat_inv=SPACE_MATRIX_INV):
     """Transforms from PDX space (-Z forward, Y up) to Maya space (Z forward, Y up)."""
-    # matrix
-    if isinstance(data, (MMatrix, pmdt.Matrix)):
-        mat = MMatrix(data)
-        return space_mat * mat * space_mat_inv
     # quaternion
-    elif isinstance(data, (MQuaternion, pmdt.Quaternion)):
+    # pmdt.Quaternion inherits from pmdt.Matrix, so this branch must stay first.
+    if isinstance(data, (MQuaternion, pmdt.Quaternion)):
         mat = MMatrix(data.asMatrix())
         return MTransformationMatrix(space_mat * mat * space_mat_inv).rotation(asQuaternion=True)
+    # matrix
+    elif isinstance(data, (MMatrix, pmdt.Matrix)) and not isinstance(data, (MQuaternion, pmdt.Quaternion)):
+        mat = MMatrix(data)
+        return space_mat * mat * space_mat_inv
     # vector
     elif isinstance(data, (MVector, pmdt.Vector)) or len(data) == 3:
         vec = MVector(data)
