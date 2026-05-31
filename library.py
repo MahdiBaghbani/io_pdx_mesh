@@ -13,6 +13,7 @@ PDX_SHADER = "shader"
 PDX_ANIMATION = "animation"
 PDX_IGNOREJOINT = "pdxIgnoreJoint"
 PDX_MESHINDEX = "meshindex"
+PDX_MATERIALINDEX = "pdxMaterialIndex"
 PDX_MAXSKININFS = 4
 PDX_MAXUVSETS = 4
 

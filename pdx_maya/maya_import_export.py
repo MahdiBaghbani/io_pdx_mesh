@@ -35,6 +35,7 @@ from ..library import (
     PDX_ANIMATION,
     PDX_DECIMALPTS,
     PDX_IGNOREJOINT,
+    PDX_MATERIALINDEX,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
@@ -765,13 +766,29 @@ def create_shader(PDX_material, shader_name, texture_dir):
     return new_shader, new_shadinggroup
 
 
-def create_material(PDX_material, mesh, texture_folder):
+def create_material(PDX_material, mesh, texture_folder, source_mat_index=None):
     shader_name = "PDXmat_" + mesh.name()
     shader, group = create_shader(PDX_material, shader_name, texture_folder)
+
+    if source_mat_index is not None:
+        try:
+            source_mat_index = int(source_mat_index)
+        except (TypeError, ValueError):
+            source_mat_index = None
+
+    if source_mat_index is not None:
+        if not shader.hasAttr(PDX_MATERIALINDEX):
+            pmc.addAttr(shader, longName=PDX_MATERIALINDEX, attributeType="long")
+        getattr(shader, PDX_MATERIALINDEX).set(source_mat_index)
+
+        if not group.hasAttr(PDX_MATERIALINDEX):
+            pmc.addAttr(group, longName=PDX_MATERIALINDEX, attributeType="long")
+        getattr(group, PDX_MATERIALINDEX).set(source_mat_index)
 
     pmc.select(mesh)
     mesh.backfaceCulling.set(1)
     pmc.hyperShade(assign=group)
+    return shader, group
 
 
 def create_locator(PDX_locator, PDX_bone_dict):
@@ -1338,7 +1355,7 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                 if pdx_material:
                     IO_PDX_LOG.info(f"Creating material - '{pdx_material.shader[0]}'")
                     progress("update", 1, "creating material")
-                    create_material(pdx_material, mesh, os.path.split(meshpath)[0])
+                    create_material(pdx_material, mesh, os.path.split(meshpath)[0], source_mat_index=mat_idx)
 
                 # create the skin cluster
                 if joints and pdx_skin:
@@ -1426,19 +1443,62 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 objnode_xml.set("lod", [lod_match])
 
             # one shape can have multiple materials on a per meshface basis
-            shading_groups = list(set(shape.connections(type="shadingEngine")))
-
-            for mat_idx, group in enumerate(shading_groups):
+            shading_groups = []
+            seen_groups = set()
+            for group in shape.connections(type="shadingEngine"):
+                if group in seen_groups:
+                    continue
+                seen_groups.add(group)
+                shading_groups.append(group)
+            shading_groups_sorted = []
+            missing_pdx_mat_index = False
+            for group in shading_groups:
                 # this type of ObjectSet associates shaders with geometry
                 shaders = group.surfaceShader.connections()
                 # skip shading groups that are unconnected or not PDX materials
                 if len(shaders) != 1 or not hasattr(shaders[0], PDX_SHADER):
                     continue
                 maya_mat = shaders[0]
+                sort_index = None
+                if maya_mat.hasAttr(PDX_MATERIALINDEX):
+                    sort_index = getattr(maya_mat, PDX_MATERIALINDEX).get()
+                if sort_index is None and group.hasAttr(PDX_MATERIALINDEX):
+                    sort_index = getattr(group, PDX_MATERIALINDEX).get()
+                try:
+                    sort_index = int(sort_index) if sort_index is not None else None
+                except (TypeError, ValueError):
+                    sort_index = None
+                if sort_index is None:
+                    missing_pdx_mat_index = True
+
+                # stable tie-breakers for deterministic output even without stored index
+                shading_groups_sorted.append(
+                    (
+                        sort_index if sort_index is not None else 10**9,
+                        maya_mat.name(),
+                        group.name(),
+                        group,
+                        maya_mat,
+                    )
+                )
+
+            shading_groups_sorted.sort(key=lambda t: (t[0], t[1], t[2]))
+
+            if missing_pdx_mat_index and shading_groups_sorted:
+                IO_PDX_LOG.warning(
+                    "One or more PDX materials are missing '%s' on export; submesh/material order may not match the "
+                    "source file. Re-import the mesh to preserve original order.",
+                    PDX_MATERIALINDEX,
+                )
+
+            for mat_idx, (_sort_index, _mat_name, _group_name, group, maya_mat) in enumerate(shading_groups_sorted):
 
                 # check which faces are using this shading group
                 # (groups are shared across shapes, so only select group members that are components of this shape)
-                mesh = [meshface for meshface in group.members(flatten=True) if meshface.node() == shape][0]
+                mesh_candidates = [meshface for meshface in group.members(flatten=True) if meshface.node() == shape]
+                if not mesh_candidates:
+                    continue
+                mesh = mesh_candidates[0]
 
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(

@@ -31,6 +31,7 @@ from ..library import (
     PDX_ANIMATION,  # noqa: F401
     PDX_DECIMALPTS,  # noqa: F401
     PDX_IGNOREJOINT,
+    PDX_MATERIALINDEX,
     PDX_MAXSKININFS,
     PDX_MAXUVSETS,
     PDX_MESHINDEX,
@@ -879,6 +880,7 @@ def create_material(
     use_diffuse_alpha=False,
     diffuse_alpha_mode="CLIP",
     diffuse_alpha_threshold=0.5,
+    source_mat_index=None,
 ):
     shader_name = "PDXmat_" + mesh.name
     shader = create_shader(
@@ -890,7 +892,15 @@ def create_material(
         diffuse_alpha_threshold=diffuse_alpha_threshold,
     )
 
+    if source_mat_index is not None:
+        try:
+            shader[PDX_MATERIALINDEX] = int(source_mat_index)
+        except (TypeError, ValueError):
+            # If the index is not an int, skip tagging; export falls back to slot order.
+            pass
+
     mesh.materials.append(shader)
+    return shader
 
 
 def create_locator(PDX_locator, PDX_bone_dict):
@@ -1441,6 +1451,7 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
                         use_diffuse_alpha=use_diffuse_alpha,
                         diffuse_alpha_mode=diffuse_alpha_mode,
                         diffuse_alpha_threshold=diffuse_alpha_threshold,
+                        source_mat_index=mat_idx,
                     )
 
                 # create the vertex group skin
@@ -1547,11 +1558,23 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
 
             # one object can have multiple materials on a per face basis
             materials = list(obj.data.materials)
-
+            material_slots = []
             for mat_idx, blender_mat in enumerate(materials):
                 # skip material slots that are empty or not PDX materials
                 if blender_mat is None or PDX_SHADER not in blender_mat.keys():
                     continue
+
+                sort_index = blender_mat.get(PDX_MATERIALINDEX, mat_idx)
+                try:
+                    sort_index = int(sort_index)
+                except (TypeError, ValueError):
+                    sort_index = mat_idx
+
+                material_slots.append((sort_index, mat_idx, blender_mat))
+
+            material_slots.sort(key=lambda t: (t[0], t[1]))
+
+            for _, mat_idx, blender_mat in material_slots:
 
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
