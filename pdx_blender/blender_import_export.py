@@ -94,13 +94,48 @@ def get_bmesh(mesh_data, **kwargs):
     return bm
 
 
-def get_rig_from_bone_name(bone_name):
+def get_rig_bone_name_map(rig):
+    rig_bone_name_map = defaultdict(list)
+    for bone in rig.data.bones:
+        rig_bone_name_map[bone.name.casefold()].append(bone.name)
+
+    return rig_bone_name_map
+
+
+def resolve_rig_bone_name(rig, bone_name, rig_bone_name_map=None):
+    rig_bone_name_map = rig_bone_name_map or get_rig_bone_name_map(rig)
+    matching_names = rig_bone_name_map.get(bone_name.casefold(), [])
+
+    if not matching_names:
+        raise KeyError(bone_name)
+    if bone_name in matching_names:
+        return bone_name
+    if len(matching_names) > 1:
+        raise RuntimeError(
+            f"Ambiguous case-insensitive bone match for '{bone_name}' on armature '{rig.name}': "
+            f"{sorted(matching_names)}"
+        )
+
+    return matching_names[0]
+
+
+def get_rig_from_bone_name(bone_name, case_insensitive=False):
     scene_rigs = [obj for obj in bpy.data.objects if isinstance(obj.data, bpy.types.Armature)]
+    ambiguous_matches = []
 
     for rig in scene_rigs:
         armt = rig.data
-        if bone_name in [b.name for b in armt.bones]:
-            return rig
+        try:
+            if case_insensitive:
+                resolve_rig_bone_name(rig, bone_name)
+                return rig
+            if bone_name in [b.name for b in armt.bones]:
+                return rig
+        except RuntimeError as err:
+            ambiguous_matches.append(str(err))
+
+    if ambiguous_matches:
+        raise RuntimeError(ambiguous_matches[0])
 
 
 def get_rig_from_mesh(blender_obj):
@@ -1544,31 +1579,36 @@ def import_animfile(animpath, frame_start=1, **kwargs):
 
     # find armature and bones being animated in the scene
     IO_PDX_LOG.info("Finding armature -")
-    matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.tag)) for bone in info]
+    matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.tag), case_insensitive=True) for bone in info]
     matching_rigs = list(set(rig for rig in matching_rigs if rig))
 
     # break on failing to find an armature to animate
     if len(matching_rigs) != 1:
         raise RuntimeError(f"Missing unique armature required for animation: {matching_rigs}")
     rig = matching_rigs[0]
+    rig_bone_name_map = get_rig_bone_name_map(rig)
 
     # check armature has all required bones, check scale uniformity
     IO_PDX_LOG.info("Finding bones -")
     scale_length = set()
     bone_errors = []
+    resolved_bone_names = []
     for bone in info:
         scale_length.add(len(bone.attrib["s"]))
-        bone_name = clean_imported_name(bone.tag)
+        imported_bone_name = clean_imported_name(bone.tag)
         try:
+            bone_name = resolve_rig_bone_name(rig, imported_bone_name, rig_bone_name_map)
             pose_bone = rig.pose.bones[bone_name]
             edit_bone = pose_bone.bone  # rig.data.bones[bone_name]
+            resolved_bone_names.append(bone_name)
         except KeyError:
-            bone_errors.append(bone_name)
-            IO_PDX_LOG.warning(f"Failed to find bone - {bone_name}")
+            resolved_bone_names.append(None)
+            bone_errors.append(imported_bone_name)
+            IO_PDX_LOG.warning(f"Failed to find bone - {imported_bone_name}")
 
     # break on missing bones
     if bone_errors:
-        raise RuntimeError(f"Missing bones required for animation: {bone_errors}")
+        raise RuntimeError(f"Missing bones required for animation (case-insensitive matching enabled): {bone_errors}")
 
     # break on variable size scale vectors
     if len(scale_length) != 1:
@@ -1588,8 +1628,7 @@ def import_animfile(animpath, frame_start=1, **kwargs):
     # set the initial pose (includes un-keyframed bones)
     initial_pose = dict()
     IO_PDX_LOG.info(f"Setting initial pose - {len(info)} bones")
-    for bone in info:
-        bone_name = clean_imported_name(bone.tag)
+    for bone, bone_name in zip(info, resolved_bone_names):
         pose_bone = rig.pose.bones[bone_name]
         edit_bone = pose_bone.bone  # rig.data.bones[bone_name]
 
@@ -1623,8 +1662,7 @@ def import_animfile(animpath, frame_start=1, **kwargs):
 
     # check which transform types are animated on each bone
     all_bone_keyframes = OrderedDict()
-    for bone in info:
-        bone_name = clean_imported_name(bone.tag)
+    for bone, bone_name in zip(info, resolved_bone_names):
         all_bone_keyframes[bone_name] = {sample_type: [] for sample_type in bone.attrib["sa"][0]}
 
     # then traverse the samples data to store keys per bone
