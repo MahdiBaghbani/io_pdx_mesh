@@ -73,6 +73,12 @@ for screenshots, setup notes, and other documentation.
   material/shader property workflow, not arbitrary Blender materials.
 - Issue #112: `Unknown file header` usually means the file is not a supported
   PDX mesh or animation file. Verify the file source first.
+- Blender import option `Use diffuse alpha for transparency` is for viewport
+  preview only. Export does not serialize that alpha hookup back into PDX
+  material data.
+- Diffuse alpha conventions vary by shader and game, so imported
+  transparency may need manual review. Maya already auto-connects diffuse
+  alpha when the source image provides it.
 
 ---
 

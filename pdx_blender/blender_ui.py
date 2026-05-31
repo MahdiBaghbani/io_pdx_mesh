@@ -8,7 +8,7 @@ import importlib
 from textwrap import wrap
 
 import bpy  # type: ignore
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty  # type: ignore
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty  # type: ignore
 from bpy.types import Operator, Panel, UIList  # type: ignore
 from bpy_extras.io_utils import ExportHelper, ImportHelper  # type: ignore
 
@@ -354,6 +354,27 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
         description="Join materials",
         default=True,
     )
+    chk_use_diffuse_alpha: BoolProperty(
+        name="Use diffuse alpha for transparency",
+        description="Connect diffuse texture alpha to imported material transparency for viewport preview",
+        default=False,
+    )
+    ddl_diffuse_alpha_mode: EnumProperty(
+        name="Diffuse alpha mode",
+        description="Choose how diffuse alpha is previewed on imported materials",
+        items=(
+            ("CLIP", "Clip", "Use hard alpha cutouts"),
+            ("BLEND", "Blend", "Use partial transparency"),
+        ),
+        default="CLIP",
+    )
+    diffuse_alpha_threshold: FloatProperty(
+        name="Alpha threshold",
+        description="Alpha cutoff threshold used for clip mode",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+    )
     chk_bonespace: BoolProperty(
         name="Convert bone orientation - WARNING",
         description="Convert bone orientation - WARNING: this re-orients bones authored at source and will BREAK ALL "
@@ -371,6 +392,13 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
             split = mesh_settings.split(factor=0.1)
             _, col = split.column(), split.column()
             col.prop(self, "chk_joinmats")
+            col.prop(self, "chk_use_diffuse_alpha")
+            if self.chk_use_diffuse_alpha:
+                alpha_settings = col.column()
+                alpha_settings.prop(self, "ddl_diffuse_alpha_mode")
+                threshold_col = alpha_settings.column()
+                threshold_col.enabled = self.ddl_diffuse_alpha_mode == "CLIP"
+                threshold_col.prop(self, "diffuse_alpha_threshold")
         box.prop(self, "chk_skel")
         box.prop(self, "chk_locs")
         # box.prop(self, 'chk_bonespace')  # TODO: works but overcomplicates things, disabled for now
@@ -384,6 +412,9 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
                 imp_locs=self.chk_locs,
                 join_materials=self.chk_joinmats,
                 bonespace=self.chk_bonespace,
+                use_diffuse_alpha=self.chk_use_diffuse_alpha,
+                diffuse_alpha_mode=self.ddl_diffuse_alpha_mode,
+                diffuse_alpha_threshold=self.diffuse_alpha_threshold,
             )
             self.report({"INFO"}, f"[io_pdx_mesh] Mesh import finished '{self.filepath}'")
             IO_PDX_SETTINGS.last_import_mesh = self.filepath
