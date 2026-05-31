@@ -43,6 +43,7 @@ from ..library import (
     PDX_ROUND_TRANS,
     PDX_SHADER,
     allow_debug_logging,
+    deduplicate_export_locator_names,
     get_lod_level,
 )
 
@@ -556,7 +557,19 @@ def get_bones_info(maya_bones):
 
 def get_locators_info(maya_locators):
     # build a list of locator information dictionaries for the exporter
-    locator_list = [{"name": x.name()} for x in maya_locators]
+    original_names = [loc.name() for loc in maya_locators]
+    locator_names = deduplicate_export_locator_names(original_names)
+    locator_list = [{"name": name} for name in locator_names]
+    renamed_locators = [
+        (original_name, locator_name)
+        for original_name, locator_name in zip(original_names, locator_names)
+        if original_name != locator_name
+    ]
+
+    if renamed_locators:
+        IO_PDX_LOG.info("Sanitized %d locator export name(s) for export", len(renamed_locators))
+        for original_name, locator_name in renamed_locators:
+            IO_PDX_LOG.debug("Sanitized locator export name '%s' -> '%s'", original_name, locator_name)
 
     for i, loc in enumerate(maya_locators):
         # unparented, use worldspace position/rotation
@@ -1519,6 +1532,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
         # optionally intersect with selection
         if exp_selected:
             maya_locators = [obj for obj in maya_locators if obj in current_selection]
+        maya_locators = sorted(maya_locators, key=lambda obj: obj.name())
 
         loc_info_list = get_locators_info(maya_locators)
         IO_PDX_LOG.info("Writing locators -")

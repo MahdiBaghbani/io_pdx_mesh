@@ -39,6 +39,7 @@ from ..library import (
     PDX_ROUND_TRANS,  # noqa: F401
     PDX_SHADER,
     allow_debug_logging,
+    deduplicate_export_locator_names,
     get_lod_level,
 )
 
@@ -510,7 +511,19 @@ def get_bones_info(blender_bones):
 
 def get_locators_info(blender_empties):
     # build a list of locator information dictionaries for the exporter
-    locator_list = [{"name": x.name} for x in blender_empties]
+    original_names = [obj.name for obj in blender_empties]
+    locator_names = deduplicate_export_locator_names(original_names)
+    locator_list = [{"name": name} for name in locator_names]
+    renamed_locators = [
+        (original_name, locator_name)
+        for original_name, locator_name in zip(original_names, locator_names)
+        if original_name != locator_name
+    ]
+
+    if renamed_locators:
+        IO_PDX_LOG.info("Sanitized %d locator export name(s) for export", len(renamed_locators))
+        for original_name, locator_name in renamed_locators:
+            IO_PDX_LOG.debug("Sanitized locator export name '%s' -> '%s'", original_name, locator_name)
 
     for i, obj in enumerate(blender_empties):
         # unparented, use worldspace position/rotation
@@ -1565,6 +1578,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
         # optionally intersect with selection
         if exp_selected:
             blender_empties = [obj for obj in blender_empties if obj.select_get()]
+        blender_empties = sorted(blender_empties, key=lambda obj: obj.name)
 
         loc_info_list = get_locators_info(blender_empties)
         IO_PDX_LOG.info("Writing locators -")
